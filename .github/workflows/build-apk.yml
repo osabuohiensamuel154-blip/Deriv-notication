@@ -51,22 +51,10 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
-      - name: Create assets directory
-        working-directory: DerivNotify
-        run: mkdir -p android/app/src/main/assets
-
-      # Bundle JS into the APK so it runs standalone (no Metro server needed)
-      - name: Bundle JavaScript into APK
-        working-directory: DerivNotify
-        run: |
-          npx react-native bundle \
-            --platform android \
-            --dev false \
-            --entry-file index.ts \
-            --bundle-output android/app/src/main/assets/index.android.bundle \
-            --assets-dest android/app/src/main/res/
-        env:
-          EXPO_NO_TELEMETRY: 1
+      # Tell Gradle to bundle JS even in debug builds → standalone APK, no Metro needed
+      - name: Enable JS bundling in debug builds
+        working-directory: DerivNotify/android
+        run: echo "bundleInDebug=true" >> gradle.properties
 
       - name: Make Gradle executable
         working-directory: DerivNotify/android
