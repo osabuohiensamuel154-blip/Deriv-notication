@@ -82,14 +82,10 @@ jobs:
           key: gradle-${{ hashFiles('DerivNotify/android/**/*.gradle*', 'DerivNotify/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      # Skip Gradle's own JS bundling — already done above
+      # bundleInDebug is false by default — Gradle won't re-bundle, uses our pre-built assets
       - name: Build standalone Debug APK
         working-directory: DerivNotify/android
-        run: |
-          ./gradlew assembleDebug \
-            -x bundleDebugJsAndAssets \
-            -x createBundleDebugJsAndAssets \
-            --no-daemon
+        run: ./gradlew assembleDebug --no-daemon
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
 
