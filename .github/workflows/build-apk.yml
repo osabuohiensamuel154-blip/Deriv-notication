@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build Android APK (Standalone)
     runs-on: ubuntu-latest
 
     steps:
@@ -51,6 +51,23 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
+      - name: Create assets directory
+        working-directory: DerivNotify
+        run: mkdir -p android/app/src/main/assets
+
+      # Bundle JS into the APK so it runs standalone (no Metro server needed)
+      - name: Bundle JavaScript into APK
+        working-directory: DerivNotify
+        run: |
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.ts \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res/
+        env:
+          EXPO_NO_TELEMETRY: 1
+
       - name: Make Gradle executable
         working-directory: DerivNotify/android
         run: chmod +x gradlew
@@ -64,21 +81,26 @@ jobs:
           key: gradle-${{ hashFiles('DerivNotify/android/**/*.gradle*', 'DerivNotify/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      - name: Build Debug APK
+      - name: Build standalone Debug APK
         working-directory: DerivNotify/android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --no-daemon
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+
+      - name: Rename APK
+        run: |
+          mkdir -p output
+          cp DerivNotify/android/app/build/outputs/apk/debug/app-debug.apk \
+             output/deriv-price-alerts.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: deriv-price-alerts-debug-apk
-          path: DerivNotify/android/app/build/outputs/apk/debug/*.apk
+          name: deriv-price-alerts-apk
+          path: output/deriv-price-alerts.apk
           retention-days: 30
 
       - name: Show APK info
         run: |
-          APK=$(find DerivNotify/android/app/build/outputs/apk/debug -name "*.apk" | head -1)
-          echo "APK built: $APK"
-          ls -lh "$APK"
+          echo "✅ Standalone APK ready (no Metro server needed)"
+          ls -lh output/deriv-price-alerts.apk
