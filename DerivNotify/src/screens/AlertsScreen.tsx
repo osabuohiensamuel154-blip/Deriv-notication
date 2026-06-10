@@ -7,77 +7,73 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { PriceAlert, storageService } from '../services/storage';
 import { AlertCard } from '../components/AlertCard';
+import { alertMonitor } from '../services/alertMonitor';
 import { derivApi, TickData } from '../services/derivApi';
-import { notificationService } from '../services/notifications';
 
 export const AlertsScreen: React.FC = () => {
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [filter, setFilter] = useState<'all' | 'active' | 'triggered'>('all');
   const unsubsRef = useRef<Record<string, () => void>>({});
+  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadAlerts = useCallback(async () => {
     const all = await storageService.getAlerts();
     setAlerts(all.sort((a, b) => b.createdAt - a.createdAt));
+    // Seed prices from the global monitor cache
+    const cached: Record<string, number> = {};
+    for (const a of all) {
+      const p = alertMonitor.getLatestPrice(a.symbol);
+      if (p !== undefined) cached[a.symbol] = p;
+    }
+    setPrices((prev) => ({ ...prev, ...cached }));
   }, []);
 
-  useEffect(() => {
-    loadAlerts();
-  }, [loadAlerts]);
+  // Reload every time the user navigates to this tab
+  useFocusEffect(
+    useCallback(() => {
+      loadAlerts();
+      alertMonitor.refresh();
 
-  // Subscribe to live prices for all alert symbols
-  useEffect(() => {
-    const activeSymbols = [...new Set(
-      alerts.filter((a) => a.active && !a.triggered).map((a) => a.symbol)
-    )];
+      // Poll for price updates while on this screen
+      refreshTimerRef.current = setInterval(loadAlerts, 3000);
+      return () => {
+        if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
+      };
+    }, [loadAlerts])
+  );
 
-    // Unsubscribe removed symbols
-    Object.keys(unsubsRef.current).forEach((sym) => {
-      if (!activeSymbols.includes(sym)) {
+  // Subscribe to live prices for visible alerts
+  useEffect(() => {
+    const symbols = [...new Set(alerts.map((a) => a.symbol))];
+
+    // Drop stale subscriptions
+    for (const sym of Object.keys(unsubsRef.current)) {
+      if (!symbols.includes(sym)) {
         unsubsRef.current[sym]?.();
         delete unsubsRef.current[sym];
       }
-    });
+    }
 
-    // Subscribe to new symbols
-    activeSymbols.forEach((sym) => {
-      if (unsubsRef.current[sym]) return;
-      unsubsRef.current[sym] = derivApi.subscribe(sym, async (tick: TickData) => {
-        setPrices((prev) => ({ ...prev, [sym]: tick.price }));
-
-        // Check alerts for this symbol
-        const current = await storageService.getAlerts();
-        const matching = current.filter(
-          (a) => a.symbol === sym && a.active && !a.triggered
-        );
-        for (const alert of matching) {
-          const triggered =
-            (alert.condition === 'above' && tick.price >= alert.targetPrice) ||
-            (alert.condition === 'below' && tick.price <= alert.targetPrice);
-
-          if (triggered) {
-            await storageService.markAlertTriggered(alert.id);
-            await notificationService.sendPriceAlert(
-              alert.instrumentName,
-              alert.condition,
-              alert.targetPrice,
-              tick.price
-            );
-            loadAlerts();
-          }
-        }
-      });
-    });
+    // Add new subscriptions
+    for (const sym of symbols) {
+      if (!unsubsRef.current[sym]) {
+        unsubsRef.current[sym] = derivApi.subscribe(sym, (tick: TickData) => {
+          setPrices((prev) => ({ ...prev, [sym]: tick.price }));
+        });
+      }
+    }
 
     return () => {
-      Object.values(unsubsRef.current).forEach((unsub) => unsub());
+      for (const unsub of Object.values(unsubsRef.current)) unsub();
       unsubsRef.current = {};
     };
-  }, [alerts, loadAlerts]);
+  }, [alerts]);
 
-  const deleteAlert = async (id: string) => {
+  const deleteAlert = (id: string) => {
     Alert.alert('Delete Alert', 'Remove this price alert?', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -85,6 +81,7 @@ export const AlertsScreen: React.FC = () => {
         style: 'destructive',
         onPress: async () => {
           await storageService.deleteAlert(id);
+          await alertMonitor.refresh();
           loadAlerts();
         },
       },
@@ -95,12 +92,14 @@ export const AlertsScreen: React.FC = () => {
     const alert = alerts.find((a) => a.id === id);
     if (!alert) return;
     await storageService.saveAlert({ ...alert, active: !alert.active });
+    await alertMonitor.refresh();
     loadAlerts();
   };
 
   const clearTriggered = async () => {
-    const triggered = alerts.filter((a) => a.triggered);
-    for (const a of triggered) await storageService.deleteAlert(a.id);
+    for (const a of alerts.filter((x) => x.triggered)) {
+      await storageService.deleteAlert(a.id);
+    }
     loadAlerts();
   };
 
@@ -115,23 +114,23 @@ export const AlertsScreen: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      {/* Stats row */}
       <View style={styles.statsRow}>
         <View style={styles.stat}>
           <Text style={styles.statNum}>{activeCount}</Text>
           <Text style={styles.statLabel}>Active</Text>
         </View>
+        <View style={styles.statDivider} />
         <View style={styles.stat}>
           <Text style={[styles.statNum, { color: '#F59E0B' }]}>{triggeredCount}</Text>
           <Text style={styles.statLabel}>Triggered</Text>
         </View>
+        <View style={styles.statDivider} />
         <View style={styles.stat}>
           <Text style={styles.statNum}>{alerts.length}</Text>
           <Text style={styles.statLabel}>Total</Text>
         </View>
       </View>
 
-      {/* Filter tabs */}
       <View style={styles.tabs}>
         {(['all', 'active', 'triggered'] as const).map((tab) => (
           <TouchableOpacity
@@ -156,11 +155,13 @@ export const AlertsScreen: React.FC = () => {
         <View style={styles.empty}>
           <Text style={styles.emptyIcon}>🔔</Text>
           <Text style={styles.emptyText}>
-            {filter === 'active' ? 'No active alerts' : filter === 'triggered' ? 'No triggered alerts' : 'No alerts yet'}
+            {filter === 'active'
+              ? 'No active alerts'
+              : filter === 'triggered'
+              ? 'No triggered alerts'
+              : 'No alerts yet'}
           </Text>
-          <Text style={styles.emptySub}>
-            Go to Instruments tab to set price alerts
-          </Text>
+          <Text style={styles.emptySub}>Go to Markets tab to set price alerts</Text>
         </View>
       ) : (
         <FlatList
@@ -186,11 +187,12 @@ const styles = StyleSheet.create({
   statsRow: {
     flexDirection: 'row',
     backgroundColor: '#16213E',
-    padding: 20,
+    paddingVertical: 20,
   },
   stat: { flex: 1, alignItems: 'center' },
   statNum: { color: '#E2E8F0', fontSize: 24, fontWeight: '700' },
   statLabel: { color: '#64748B', fontSize: 12, marginTop: 2 },
+  statDivider: { width: 1, backgroundColor: '#2D3748', marginVertical: 4 },
   tabs: {
     flexDirection: 'row',
     backgroundColor: '#1A1A2E',
@@ -214,5 +216,11 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 80 },
   emptyIcon: { fontSize: 52 },
   emptyText: { color: '#E2E8F0', fontSize: 16, fontWeight: '600', marginTop: 16 },
-  emptySub: { color: '#64748B', fontSize: 13, marginTop: 6, textAlign: 'center', marginHorizontal: 32 },
+  emptySub: {
+    color: '#64748B',
+    fontSize: 13,
+    marginTop: 6,
+    textAlign: 'center',
+    marginHorizontal: 32,
+  },
 });

@@ -2,7 +2,10 @@ import React, { useState } from 'react';
 import {
   Alert,
   FlatList,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -17,6 +20,7 @@ import {
 } from '../constants/instruments';
 import { PriceCard } from '../components/PriceCard';
 import { storageService, PriceAlert } from '../services/storage';
+import { alertMonitor } from '../services/alertMonitor';
 
 interface AlertModalState {
   instrument: Instrument;
@@ -33,14 +37,26 @@ const AlertModal: React.FC<{
   onClose: () => void;
 }> = ({ state, alertPrice, alertCondition, onChangePrice, onChangeCondition, onSave, onClose }) => (
   <Modal visible={!!state} transparent animationType="slide">
-    <View style={styles.modalOverlay}>
-      <View style={styles.modalBox}>
+    {/* KeyboardAvoidingView pushes the sheet above the keyboard */}
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.modalOverlay}
+    >
+      <TouchableOpacity style={styles.modalDismiss} activeOpacity={1} onPress={onClose} />
+      <ScrollView
+        style={styles.modalBox}
+        contentContainerStyle={styles.modalContent}
+        keyboardShouldPersistTaps="handled"
+        bounces={false}
+      >
+        <View style={styles.modalHandle} />
         <Text style={styles.modalTitle}>Set Price Alert</Text>
         {state && (
           <>
             <Text style={styles.modalInst}>{state.instrument.name}</Text>
             <Text style={styles.modalCurrent}>
-              Current Price: {state.price.toFixed(5)}
+              Current Price:{' '}
+              <Text style={styles.modalPrice}>{state.price.toFixed(5)}</Text>
             </Text>
 
             <Text style={styles.modalLabel}>Notify me when price is:</Text>
@@ -50,7 +66,7 @@ const AlertModal: React.FC<{
                 onPress={() => onChangeCondition('above')}
               >
                 <Text style={[styles.condBtnText, alertCondition === 'above' && styles.condBtnTextActive]}>
-                  ↑ Above
+                  ↑  Above
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -58,7 +74,7 @@ const AlertModal: React.FC<{
                 onPress={() => onChangeCondition('below')}
               >
                 <Text style={[styles.condBtnText, alertCondition === 'below' && styles.condBtnTextActive]}>
-                  ↓ Below
+                  ↓  Below
                 </Text>
               </TouchableOpacity>
             </View>
@@ -71,6 +87,8 @@ const AlertModal: React.FC<{
               keyboardType="decimal-pad"
               placeholderTextColor="#64748B"
               placeholder="Enter target price"
+              returnKeyType="done"
+              onSubmitEditing={onSave}
             />
 
             <View style={styles.modalActions}>
@@ -78,13 +96,13 @@ const AlertModal: React.FC<{
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.saveBtn} onPress={onSave}>
-                <Text style={styles.saveText}>Set Alert</Text>
+                <Text style={styles.saveText}>Set Alert 🔔</Text>
               </TouchableOpacity>
             </View>
           </>
         )}
-      </View>
-    </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   </Modal>
 );
 
@@ -121,7 +139,7 @@ export const InstrumentsScreen: React.FC = () => {
       Alert.alert('Invalid Price', 'Please enter a valid target price.');
       return;
     }
-    const alert: PriceAlert = {
+    const newAlert: PriceAlert = {
       id: `${alertModalState.instrument.symbol}_${Date.now()}`,
       symbol: alertModalState.instrument.symbol,
       instrumentName: alertModalState.instrument.name,
@@ -133,10 +151,12 @@ export const InstrumentsScreen: React.FC = () => {
       triggered: false,
       active: true,
     };
-    await storageService.saveAlert(alert);
+    await storageService.saveAlert(newAlert);
+    // Immediately start monitoring this new alert
+    await alertMonitor.refresh();
     closeAlertModal();
     Alert.alert(
-      'Alert Set!',
+      '🔔 Alert Set!',
       `You'll be notified when ${alertModalState.instrument.name} goes ${alertCondition} ${target.toFixed(5)}`
     );
   };
@@ -189,6 +209,11 @@ export const InstrumentsScreen: React.FC = () => {
           placeholder="Search instruments..."
           placeholderTextColor="#64748B"
         />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')}>
+            <Text style={styles.clearSearch}>✕</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <FlatList
@@ -226,18 +251,9 @@ export const InstrumentsScreen: React.FC = () => {
 
 function getCategoryEmoji(id: string): string {
   const map: Record<string, string> = {
-    volatility: '📈',
-    crash_boom: '💥',
-    jump: '🚀',
-    step: '📶',
-    forex_major: '💱',
-    forex_minor: '💰',
-    metals: '🥇',
-    energies: '⚡',
-    crypto: '₿',
-    indices: '🏦',
-    basket: '🧺',
-    derived: '🔬',
+    volatility: '📈', crash_boom: '💥', jump: '🚀', step: '📶',
+    range_break: '↔️', forex_major: '💱', forex_minor: '💰',
+    metals: '🥇', energies: '⚡', crypto: '₿', indices: '🏦', basket: '🧺',
   };
   return map[id] ?? '📊';
 }
@@ -254,6 +270,7 @@ const styles = StyleSheet.create({
   },
   searchIcon: { fontSize: 16, marginRight: 8 },
   searchInput: { flex: 1, color: '#E2E8F0', fontSize: 15, paddingVertical: 12 },
+  clearSearch: { color: '#64748B', fontSize: 16, paddingLeft: 8 },
   catCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -265,13 +282,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     elevation: 2,
   },
-  catIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  catIcon: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   catIconText: { fontSize: 22 },
   catInfo: { flex: 1, marginLeft: 12 },
   catName: { color: '#E2E8F0', fontSize: 15, fontWeight: '700' },
@@ -282,72 +293,54 @@ const styles = StyleSheet.create({
   backText: { color: '#FF6B35', fontSize: 15, fontWeight: '600' },
   categoryTitle: { fontSize: 20, fontWeight: '800' },
   categoryCount: { color: '#64748B', fontSize: 13, marginTop: 2 },
+  // Modal
   modalOverlay: {
     flex: 1,
-    backgroundColor: '#00000088',
     justifyContent: 'flex-end',
+    backgroundColor: '#00000088',
   },
+  modalDismiss: { flex: 1 },
   modalBox: {
     backgroundColor: '#1A1A2E',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 24,
-    paddingBottom: 40,
+    maxHeight: '85%',
   },
-  modalTitle: {
-    color: '#E2E8F0',
-    fontSize: 20,
-    fontWeight: '800',
-    textAlign: 'center',
-    marginBottom: 4,
+  modalContent: { padding: 24, paddingBottom: 40 },
+  modalHandle: {
+    width: 40, height: 4, backgroundColor: '#2D3748',
+    borderRadius: 2, alignSelf: 'center', marginBottom: 20,
   },
-  modalInst: { color: '#94A3B8', fontSize: 14, textAlign: 'center', marginBottom: 2 },
-  modalCurrent: {
-    color: '#FF6B35',
-    fontSize: 16,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  modalLabel: { color: '#94A3B8', fontSize: 13, fontWeight: '600', marginBottom: 8, marginTop: 12 },
+  modalTitle: { color: '#E2E8F0', fontSize: 20, fontWeight: '800', textAlign: 'center' },
+  modalInst: { color: '#94A3B8', fontSize: 14, textAlign: 'center', marginTop: 4 },
+  modalCurrent: { color: '#94A3B8', fontSize: 14, textAlign: 'center', marginTop: 6, marginBottom: 20 },
+  modalPrice: { color: '#FF6B35', fontWeight: '700' },
+  modalLabel: { color: '#94A3B8', fontSize: 13, fontWeight: '600', marginBottom: 8, marginTop: 16 },
   condRow: { flexDirection: 'row', gap: 12 },
   condBtn: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#2D3748',
-    alignItems: 'center',
+    flex: 1, padding: 14, borderRadius: 10,
+    borderWidth: 1, borderColor: '#2D3748', alignItems: 'center',
   },
   condBtnActive: { backgroundColor: '#FF6B35', borderColor: '#FF6B35' },
-  condBtnText: { color: '#94A3B8', fontWeight: '600' },
+  condBtnText: { color: '#94A3B8', fontWeight: '700', fontSize: 15 },
   condBtnTextActive: { color: '#FFF' },
   priceInput: {
     backgroundColor: '#0D0D1A',
     borderRadius: 10,
-    padding: 14,
+    padding: 16,
     color: '#E2E8F0',
-    fontSize: 18,
+    fontSize: 20,
     fontFamily: 'monospace',
     borderWidth: 1,
     borderColor: '#2D3748',
+    letterSpacing: 1,
   },
   modalActions: { flexDirection: 'row', gap: 12, marginTop: 24 },
   cancelBtn: {
-    flex: 1,
-    padding: 14,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#2D3748',
-    alignItems: 'center',
+    flex: 1, padding: 14, borderRadius: 10,
+    borderWidth: 1, borderColor: '#2D3748', alignItems: 'center',
   },
   cancelText: { color: '#94A3B8', fontWeight: '600' },
-  saveBtn: {
-    flex: 1,
-    padding: 14,
-    borderRadius: 10,
-    backgroundColor: '#FF6B35',
-    alignItems: 'center',
-  },
-  saveText: { color: '#FFF', fontWeight: '700' },
+  saveBtn: { flex: 1, padding: 14, borderRadius: 10, backgroundColor: '#FF6B35', alignItems: 'center' },
+  saveText: { color: '#FFF', fontWeight: '700', fontSize: 15 },
 });
