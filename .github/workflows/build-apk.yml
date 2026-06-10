@@ -38,9 +38,13 @@ jobs:
         run: |
           yes | sdkmanager "platforms;android-34" "build-tools;34.0.0" --sdk_root=$ANDROID_SDK_ROOT
 
-      - name: Install dependencies
+      - name: Install app dependencies
         working-directory: DerivNotify
         run: npm ci
+
+      - name: Install React Native CLI (needed for bundling)
+        working-directory: DerivNotify
+        run: npm install --no-save @react-native-community/cli@latest
 
       - name: Install Expo CLI
         run: npm install -g @expo/cli@latest
@@ -51,10 +55,23 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
-      # Tell Gradle to bundle JS even in debug builds → standalone APK, no Metro needed
-      - name: Enable JS bundling in debug builds
-        working-directory: DerivNotify/android
-        run: echo "bundleInDebug=true" >> gradle.properties
+      - name: Create assets directory
+        working-directory: DerivNotify
+        run: mkdir -p android/app/src/main/assets
+
+      # Bundle JS manually so the APK runs standalone — no Metro server needed
+      - name: Bundle JavaScript into APK assets
+        working-directory: DerivNotify
+        run: |
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.ts \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res/
+        env:
+          NODE_ENV: production
+          EXPO_NO_TELEMETRY: 1
 
       - name: Make Gradle executable
         working-directory: DerivNotify/android
@@ -69,9 +86,14 @@ jobs:
           key: gradle-${{ hashFiles('DerivNotify/android/**/*.gradle*', 'DerivNotify/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
+      # Skip Gradle's own bundling task — JS is already in assets from above
       - name: Build standalone Debug APK
         working-directory: DerivNotify/android
-        run: ./gradlew assembleDebug --no-daemon
+        run: |
+          ./gradlew assembleDebug \
+            -x bundleDebugJsAndAssets \
+            -x createBundleDebugJsAndAssets \
+            --no-daemon
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
 
@@ -90,5 +112,5 @@ jobs:
 
       - name: Show APK info
         run: |
-          echo "✅ Standalone APK ready (no Metro server needed)"
+          echo "✅ Standalone APK ready — no Metro server needed"
           ls -lh output/deriv-price-alerts.apk
