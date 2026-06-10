@@ -38,13 +38,9 @@ jobs:
         run: |
           yes | sdkmanager "platforms;android-34" "build-tools;34.0.0" --sdk_root=$ANDROID_SDK_ROOT
 
-      - name: Install app dependencies
+      - name: Install dependencies
         working-directory: DerivNotify
-        run: npm ci
-
-      - name: Install React Native CLI (needed for bundling)
-        working-directory: DerivNotify
-        run: npm install --no-save @react-native-community/cli@latest
+        run: npm ci --legacy-peer-deps
 
       - name: Install Expo CLI
         run: npm install -g @expo/cli@latest
@@ -59,7 +55,7 @@ jobs:
         working-directory: DerivNotify
         run: mkdir -p android/app/src/main/assets
 
-      # Bundle JS manually so the APK runs standalone — no Metro server needed
+      # Bundle JS manually — standalone APK, no Metro server needed on device
       - name: Bundle JavaScript into APK assets
         working-directory: DerivNotify
         run: |
@@ -86,7 +82,7 @@ jobs:
           key: gradle-${{ hashFiles('DerivNotify/android/**/*.gradle*', 'DerivNotify/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      # Skip Gradle's own bundling task — JS is already in assets from above
+      # Skip Gradle's own JS bundling — already done above
       - name: Build standalone Debug APK
         working-directory: DerivNotify/android
         run: |
@@ -112,5 +108,5 @@ jobs:
 
       - name: Show APK info
         run: |
-          echo "✅ Standalone APK ready — no Metro server needed"
+          echo "✅ Standalone APK ready — installs without Metro server"
           ls -lh output/deriv-price-alerts.apk
