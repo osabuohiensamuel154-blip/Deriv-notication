@@ -6,7 +6,7 @@ import { Text } from 'react-native';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { InstrumentsScreen } from './src/screens/InstrumentsScreen';
 import { AlertsScreen } from './src/screens/AlertsScreen';
-import { derivApi } from './src/services/derivApi';
+import { alertMonitor } from './src/services/alertMonitor';
 import { notificationService } from './src/services/notifications';
 
 const Tab = createBottomTabNavigator();
@@ -14,8 +14,9 @@ const Tab = createBottomTabNavigator();
 export default function App() {
   useEffect(() => {
     notificationService.requestPermissions();
-    derivApi.connect();
-    return () => derivApi.disconnect();
+    // Start global alert monitor — runs regardless of which screen is active
+    alertMonitor.start();
+    return () => alertMonitor.stop();
   }, []);
 
   return (
